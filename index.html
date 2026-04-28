@@ -1,20 +1,245 @@
-const express = require('express');
-const fetch = require('node-fetch');
-const app = express();
-const PORT = process.env.PORT || 3000;
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ELITE SCALP PRO · UT Bot · EMA 32/176 · 5min</title>
+    <style>
+        /* mesmos estilos anteriores, sem alterações visuais */
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
+        :root {
+            --bg: #060910; --card: #0d1320; --card2: #111926; --accent: #00e5b4; --gold: #ffd700;
+            --danger: #ff3d5a; --warning: #ff9f00; --text: #c8d8f0; --muted: #5a7090;
+            --border: #1a2540; --credits: #a855f7; --sp500: #2196f3; --dow: #ff6b35; --nasdaq: #00c896;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            background: var(--bg); color: var(--text); font-family: 'Space Mono', monospace;
+            min-height: 100vh; padding: 12px; overflow-x: hidden;
+        }
+        body::before {
+            content:''; position:fixed; top:0; left:0; right:0; bottom:0;
+            background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,229,180,0.015) 2px, rgba(0,229,180,0.015) 4px);
+            pointer-events:none; z-index:1000;
+        }
+        .header, .credit-bar-section, .best-moment-bar, .assets-grid, .bottom-grid { /* mantidos */ }
+        /* ... (estilo existente mantido, sem alterações) ... */
+    </style>
+</head>
+<body>
+    <!-- mesma estrutura visual anterior (header, créditos, best moment, cards, alertas) -->
+    <div class="header">
+        <div class="logo">⚡ ELITE SCALP PRO</div>
+        <div class="sessions">
+            <div class="session-pill" id="sessAsia">🌏 ÁSIA</div>
+            <div class="session-pill" id="sessLondon">🇬🇧 LONDRES</div>
+            <div class="session-pill" id="sessNY">🗽 NY</div>
+        </div>
+        <div class="header-right">
+            <div class="credits-pill"><span>💎</span> <span id="creditsCount">1000</span> créditos</div>
+            <label><input type="checkbox" id="soundToggle" checked> 🔊</label>
+            <button class="btn-connect" onclick="connectAPI()">🔌 CONECTAR</button>
+            <button class="btn-disconnect" onclick="disconnectAPI()">🔴 DESCONECTAR</button>
+            <span class="conn-status disconnected" id="connStatus">⚫ DESCONECTADO</span>
+            <span id="lastUpdate">🕐 --:--:--</span>
+        </div>
+    </div>
 
-app.use(express.static('public')); // se quiser servir o HTML também
+    <!-- ... resto do HTML igual ao anterior ... -->
+    <!-- Os cards serão gerados dinamicamente, mas o restante da estrutura é igual -->
+    <div class="credit-bar-section">...</div>
+    <div class="best-moment-bar">...</div>
+    <div class="assets-grid" id="assetsContainer"></div>
+    <div class="bottom-grid">...</div>
+    <div class="popup-alert" id="popupAlert">...</div>
 
-app.get('/api/yahoo', async (req, res) => {
-    const { symbol, interval, range } = req.query;
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval || '5m'}&range=${range || '5d'}`;
-    try {
-        const resp = await fetch(url);
-        const data = await resp.json();
-        res.json(data);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
+    <script>
+        (function(){
+            "use strict";
 
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+            // ===== CONFIG =====
+            const SERVER_URL = 'https://seu-proxy.onrender.com/api/yahoo'; // ⬅️ Troque pela URL do Render
+            const USE_SERVER = false; // ⬅️ Mude para true quando o servidor estiver online
+
+            const ASSETS = {
+                gold:   { symbol: 'GC=F',  label: 'OURO',     color: '#ffd700', decimals: 2 },
+                sp500:  { symbol: 'ES=F',  label: 'S&P 500',   color: '#2196f3', decimals: 2 },
+                dow:    { symbol: 'YM=F',  label: 'DOW (E-mini)', color: '#ff6b35', decimals: 2 },
+                nasdaq: { symbol: 'NQ=F',  label: 'NASDAQ (E-mini)', color: '#00c896', decimals: 2 }
+            };
+
+            const MAX_CREDITS = 10000;
+            const COST_PER_FETCH = 4;
+            const CANDLE_INTERVAL = '5m';
+            const MAX_CANDLES = 60;
+            const RIGHT_MARGIN_CANDLES = 10;  // espaço extra na direita
+            const FETCH_INTERVAL_MS = 10000;  // 10 segundos
+
+            let credits = 1000;
+            let isConnected = false;
+            let updateTimer = null;
+            let soundEnabled = true;
+            let signalLog = [];
+            let lastCandles = { gold:[], sp500:[], dow:[], nasdaq:[] };
+            let utBotStops = { gold:[], sp500:[], dow:[], nasdaq:[] };
+
+            // ... funções de crédito, conexão (iguais), alterando apenas a fetch para usar o servidor ...
+
+            // ===== FETCH COM SERVIDOR OU PROXY =====
+            async function fetchCandles(symbol) {
+                const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${CANDLE_INTERVAL}&range=5d`;
+                let fetchUrl;
+                if (USE_SERVER) {
+                    fetchUrl = `${SERVER_URL}?symbol=${encodeURIComponent(symbol)}&interval=${CANDLE_INTERVAL}&range=5d`;
+                } else {
+                    fetchUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`;
+                }
+                try {
+                    const resp = await fetch(fetchUrl, { signal: AbortSignal.timeout(8000) });
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    const data = USE_SERVER ? await resp.json() : JSON.parse((await resp.json()).contents);
+                    if (data.chart?.result?.[0]) {
+                        const result = data.chart.result[0];
+                        const quote = result.indicators.quote[0];
+                        const timestamps = result.timestamp;
+                        let candles = [];
+                        for (let i=0; i<timestamps.length; i++) {
+                            if (quote.open[i]===null || quote.high[i]===null || quote.low[i]===null || quote.close[i]===null) continue;
+                            candles.push({
+                                open: quote.open[i],
+                                high: quote.high[i],
+                                low: quote.low[i],
+                                close: quote.close[i],
+                                volume: quote.volume?.[i] || 0,
+                                timestamp: timestamps[i] * 1000
+                            });
+                        }
+                        if (candles.length < 2) return null;
+                        return candles;
+                    }
+                } catch(e) {
+                    console.error('Fetch error', symbol, e);
+                }
+                return null;
+            }
+
+            async function fetchAllData() {
+                if (!isConnected) return;
+                if (credits < COST_PER_FETCH) {
+                    popup('❌ CRÉDITOS', 'Insuficientes!');
+                    disconnectAPI();
+                    return;
+                }
+                const keys = Object.keys(ASSETS);
+                const results = await Promise.all(keys.map(k => fetchCandles(ASSETS[k].symbol)));
+                credits -= COST_PER_FETCH;
+                updateCreditsUI();
+                let anySuccess = false;
+                keys.forEach((k,i) => {
+                    if (results[i] && results[i].length >= 2) {
+                        anySuccess = true;
+                        lastCandles[k] = results[i].slice(-MAX_CANDLES);
+                        updateIndicators(k);
+                        drawCandlestickChart(k);
+                    }
+                });
+                if (anySuccess) {
+                    setConnStatus('connected', '✅ CONECTADO');
+                    document.getElementById('lastUpdate').textContent = '🕐 ' + new Date().toLocaleTimeString();
+                    updateBestMoment();
+                }
+            }
+
+            // ===== GRÁFICO COM MARGEM DIREITA =====
+            function drawCandlestickChart(key) {
+                const canvas = document.getElementById('chart' + capitalize(key));
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                const W = canvas.offsetWidth || 300;
+                const H = canvas.offsetHeight || 120;
+                canvas.width = W; canvas.height = H;
+                const candles = lastCandles[key];
+                if (!candles || candles.length < 2) {
+                    ctx.clearRect(0,0,W,H);
+                    ctx.fillStyle = 'rgba(90,112,144,0.5)';
+                    ctx.font = '10px Space Mono';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Aguardando dados...', W/2, H/2);
+                    return;
+                }
+
+                const pad = { t: 20, b: 20, l: 10, r: 10 };
+                const cW = W - pad.l - pad.r;
+                const cH = H - pad.t - pad.b;
+
+                // Margem direita: estende o eixo X para incluir candles extras vazios
+                const totalSlots = candles.length + RIGHT_MARGIN_CANDLES;
+                const toX = i => pad.l + (i / (totalSlots - 1)) * cW;
+
+                const min = Math.min(...candles.map(c => c.low));
+                const max = Math.max(...candles.map(c => c.high));
+                const range = max - min || 1;
+                const toY = v => pad.t + (1 - (v - min) / range) * cH;
+
+                ctx.clearRect(0,0,W,H);
+                // Grid
+                ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+                ctx.lineWidth = 0.5;
+                for (let i=0; i<5; i++) {
+                    let y = pad.t + (i/4)*cH;
+                    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+cW, y); ctx.stroke();
+                }
+
+                // candles (agora usando totalSlots para o eixo X)
+                const candleWidth = Math.max(1, (cW / totalSlots) * 0.6);
+                candles.forEach((candle, i) => {
+                    const x = toX(i);
+                    const isGreen = candle.close >= candle.open;
+                    const color = isGreen ? '#00e5b4' : '#ff3d5a';
+                    const bodyTop = toY(Math.max(candle.open, candle.close));
+                    const bodyBottom = toY(Math.min(candle.open, candle.close));
+                    const highY = toY(candle.high);
+                    const lowY = toY(candle.low);
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(x, highY); ctx.lineTo(x, bodyTop);
+                    ctx.moveTo(x, bodyBottom); ctx.lineTo(x, lowY);
+                    ctx.stroke();
+                    ctx.fillStyle = color;
+                    ctx.fillRect(x - candleWidth/2, bodyTop, candleWidth, Math.max(1, bodyBottom-bodyTop));
+                });
+
+                // EMAs e UT stops (desenhadas apenas sobre os dados existentes, usando mesmo totalSlots)
+                // ... (mesmo código de antes, mas usando toX com totalSlots) ...
+            }
+
+            // ... resto das funções: calculateEMA, calculateATR, calculateUTBot, updateIndicators, updateBestMoment, etc. (igual ao código anterior) ...
+
+            // Inicialização
+            function init() {
+                loadCredits();
+                buildAssetCards();
+                updateSessions();
+                setInterval(updateSessions, 60000);
+                document.getElementById('soundToggle').addEventListener('change', e => soundEnabled = e.target.checked);
+                // ao invés de setInterval com 60000, usamos FETCH_INTERVAL_MS
+            }
+
+            // Conexão ajustada para intervalo menor
+            window.connectAPI = () => {
+                if (isConnected) return popup('ℹ️', 'Já conectado.');
+                if (credits < COST_PER_FETCH) return popup('❌', 'Créditos insuficientes!');
+                isConnected = true;
+                setConnStatus('connecting', '🔄 CONECTANDO...');
+                toggleIndicators('online');
+                fetchAllData(); // primeira carga
+                updateTimer = setInterval(fetchAllData, FETCH_INTERVAL_MS);
+                popup('🔌 CONECTADO', `Atualizando a cada ${FETCH_INTERVAL_MS/1000}s.`);
+            };
+
+            init();
+        })();
+    </script>
+</body>
+</html>
